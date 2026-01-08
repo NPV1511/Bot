@@ -40,11 +40,23 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ================== AUTO DIEM DANH ==================
-async def send_diemdanh(hour: int):
-    for gid, cfg in config.items():
+# ================== DAILY STATE ==================
+sent_today = {}
 
-        # FIX: config sai kiểu thì bỏ qua
+def reset_if_new_day(gid: str):
+    today = datetime.now(tz).date()
+    if gid not in sent_today or sent_today[gid]["date"] != today:
+        sent_today[gid] = {
+            "date": today,
+            "noon": False,
+            "evening": False
+        }
+
+# ================== DIEM DANH CORE ==================
+async def send_diemdanh(hour: int, force: bool = False):
+    for gid, cfg in config.items():
+        reset_if_new_day(gid)
+
         if not isinstance(cfg, dict):
             continue
 
@@ -52,28 +64,41 @@ async def send_diemdanh(hour: int):
         if not channel_id:
             continue
 
+        key = "noon" if hour == 12 else "evening"
+        if sent_today[gid][key] and not force:
+            continue
+
         channel = bot.get_channel(channel_id)
         if not channel:
             continue
 
-        if hour == 12:
-            msg = "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN XỊT SƠN TRƯA"
-        else:
-            msg = "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN XỊT SƠN TỐI"
+        text = (
+            "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN XỊT SƠN TRƯA"
+            if hour == 12
+            else "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN XỊT SƠN TỐI"
+        )
 
-        await channel.send(msg)
-        print(f"✅ Điểm danh {hour}:00 | Guild {gid}")
+        await channel.send(text)
 
-# ================== JOB ==================
-def noon_job():
-    bot.loop.create_task(send_diemdanh(12))
+        if not force:
+            sent_today[gid][key] = True
 
-def evening_job():
-    bot.loop.create_task(send_diemdanh(19))
+# ================== AUTO JOB ==================
+async def noon_job():
+    await send_diemdanh(12)
+
+async def evening_job():
+    await send_diemdanh(19)
+
+# ================== PERMISSION ==================
+def admin_only():
+    async def predicate(interaction: discord.Interaction):
+        return interaction.user.guild_permissions.administrator
+    return app_commands.check(predicate)
 
 # ================== SLASH COMMAND ==================
 @tree.command(name="diemdanhroom", description="Set kênh điểm danh")
-@app_commands.checks.has_permissions(administrator=True)
+@admin_only()
 async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextChannel):
     gid = str(interaction.guild.id)
     config.setdefault(gid, {})
@@ -85,30 +110,29 @@ async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextCh
         ephemeral=True
     )
 
-@tree.command(name="tinhdiemroom", description="Set kênh tính điểm")
-@app_commands.checks.has_permissions(administrator=True)
-async def tinhdiemroom(interaction: discord.Interaction, channel: discord.TextChannel):
-    gid = str(interaction.guild.id)
-    config.setdefault(gid, {})
-    config[gid]["tinhdiem_channel"] = channel.id
-    save_json(CONFIG_FILE, config)
-
-    await interaction.response.send_message(
-        f"✅ Đã set kênh tính điểm: {channel.mention}",
+@tree.command(name="testdiemdanh", description="Test điểm danh ngay lập tức")
+@admin_only()
+@app_commands.choices(
+    time=[
+        app_commands.Choice(name="Trưa (12:00)", value=12),
+        app_commands.Choice(name="Tối (19:00)", value=19),
+    ]
+)
+async def testdiemdanh(
+    interaction: discord.Interaction,
+    time: app_commands.Choice[int]
+):
+    await interaction.response.defer(ephemeral=True)
+    await send_diemdanh(time.value, force=True)
+    await interaction.followup.send(
+        f"✅ Đã test điểm danh {time.name}",
         ephemeral=True
     )
 
 @tree.command(name="tinhdiem", description="Cộng điểm từ bảng xếp hạng")
 @app_commands.describe(text="Dán bảng điểm")
 async def tinhdiem(interaction: discord.Interaction, text: str):
-    await interaction.response.send_message("⏳ Đang xử lý...", ephemeral=True)
-
-    gid = str(interaction.guild.id)
-    cfg = config.get(gid, {})
-
-    if cfg.get("tinhdiem_channel") and interaction.channel.id != cfg["tinhdiem_channel"]:
-        await interaction.followup.send("❌ Sai kênh tính điểm", ephemeral=True)
-        return
+    await interaction.response.defer(ephemeral=True)
 
     matches = re.findall(r"\d+\s+(\[[^\]]+\]\s+.+?)\s+([\d,]+)", text)
     if not matches:
@@ -116,25 +140,23 @@ async def tinhdiem(interaction: discord.Interaction, text: str):
         return
 
     for gang, score in matches:
-        score = int(score.replace(",", ""))
-        scores[gang] = scores.get(gang, 0) + score
+        scores[gang] = scores.get(gang, 0) + int(score.replace(",", ""))
 
     save_json(DATA_FILE, scores)
     await send_week_embed(interaction.channel, scores)
-
     await interaction.followup.send("✅ Đã cộng điểm", ephemeral=True)
 
 @tree.command(name="week", description="Xem TOP TUẦN")
 async def week(interaction: discord.Interaction):
-    await interaction.response.send_message("📊 Đang tải bảng xếp hạng...", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
     await send_week_embed(interaction.channel, scores)
 
 @tree.command(name="clear", description="Xóa toàn bộ điểm")
-@app_commands.checks.has_permissions(administrator=True)
+@admin_only()
 async def clear(interaction: discord.Interaction):
     scores.clear()
     save_json(DATA_FILE, scores)
-    await interaction.response.send_message("🧹 Đã xóa toàn bộ điểm!", ephemeral=True)
+    await interaction.response.send_message("🧹 Đã xóa toàn bộ điểm", ephemeral=True)
 
 # ================== EMBED ==================
 async def send_week_embed(channel, data):
@@ -143,15 +165,12 @@ async def send_week_embed(channel, data):
         return
 
     top = sorted(data.items(), key=lambda x: x[1], reverse=True)[:10]
-
-    embed = discord.Embed(
-        title="🏆 TOP TUẦN – CREW",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title="🏆 TOP TUẦN – CREW", color=discord.Color.gold())
 
     embed.description = "\n".join(
-        f"🔥 **{i}. {name}** — `{score:,}` điểm" if name == MY_GANG
-        else f"**{i}. {name}** — `{score:,}` điểm"
+        f"🔥 **{i}. {name}** — `{score:,}` điểm"
+        if name == MY_GANG else
+        f"**{i}. {name}** — `{score:,}` điểm"
         for i, (name, score) in enumerate(top, 1)
     )
 
