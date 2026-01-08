@@ -115,7 +115,7 @@ async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextCh
 @app_commands.choices(
     time=[
         app_commands.Choice(name="Trưa (12:00)", value=12),
-        app_commands.Choice(name="Tối (19:00)", value=19),
+        app_commands.Choice(name="Tối (18:00)", value=18),
     ]
 )
 async def testdiemdanh(
@@ -184,7 +184,7 @@ async def on_ready():
 
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.add_job(noon_job, "cron", hour=12, minute=0)
-    scheduler.add_job(evening_job, "cron", hour=19, minute=0)
+    scheduler.add_job(evening_job, "cron", hour=18, minute=0)
     scheduler.start()
 
 bot.run(TOKEN)
