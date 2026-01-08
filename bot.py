@@ -11,7 +11,7 @@ import re
 # ================== ENV ==================
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
-    raise RuntimeError("❌ Thiếu TOKEN trong Environment Variables")
+    raise RuntimeError("❌ Thiếu TOKEN")
 
 DATA_FILE = "data.json"
 CONFIG_FILE = "config.json"
@@ -32,10 +32,11 @@ def save_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 config = load_json(CONFIG_FILE, {})
-data_score = load_json(DATA_FILE, {})
+scores = load_json(DATA_FILE, {})
 
 # ================== BOT ==================
 intents = discord.Intents.default()
+intents.guilds = True   # ⭐ FIX QUAN TRỌNG
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
@@ -52,20 +53,20 @@ def reset_if_new_day(guild_id):
         }
 
 # ================== AUTO MESSAGE ==================
-async def send_auto(guild_id, time_key, text):
+async def send_auto(guild_id, key, text):
     reset_if_new_day(guild_id)
 
-    if sent_today[guild_id][time_key]:
+    if sent_today[guild_id][key]:
         return
 
-    guild_cfg = config.get(str(guild_id))
-    if not guild_cfg or not guild_cfg.get("diemdanh_channel"):
+    cfg = config.get(str(guild_id))
+    if not cfg or not cfg.get("diemdanh_channel"):
         return
 
-    channel = bot.get_channel(guild_cfg["diemdanh_channel"])
+    channel = bot.get_channel(cfg["diemdanh_channel"])
     if channel:
         await channel.send(text)
-        sent_today[guild_id][time_key] = True
+        sent_today[guild_id][key] = True
 
 async def noon_job():
     for gid in config:
@@ -113,7 +114,7 @@ async def tinhdiemroom(interaction: discord.Interaction, channel: discord.TextCh
 @tree.command(name="tinhdiem", description="Cộng điểm từ bảng xếp hạng")
 @app_commands.describe(text="Dán bảng điểm")
 async def tinhdiem(interaction: discord.Interaction, text: str):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.send_message("⏳ Đang xử lý...", ephemeral=True)
 
     gid = str(interaction.guild.id)
     cfg = config.get(gid)
@@ -122,27 +123,24 @@ async def tinhdiem(interaction: discord.Interaction, text: str):
         await interaction.followup.send("❌ Sai kênh tính điểm", ephemeral=True)
         return
 
-    updated = False
     matches = re.findall(r"\d+\s+(\[[^\]]+\]\s+.+?)\s+([\d,]+)", text)
-
-    for gang, score in matches:
-        score = int(score.replace(",", ""))
-        data_score[gang] = data_score.get(gang, 0) + score
-        updated = True
-
-    if not updated:
+    if not matches:
         await interaction.followup.send("❌ Không đọc được dữ liệu", ephemeral=True)
         return
 
-    save_json(DATA_FILE, data_score)
-    await send_week_embed(interaction.channel, data_score)
+    for gang, score in matches:
+        score = int(score.replace(",", ""))
+        scores[gang] = scores.get(gang, 0) + score
+
+    save_json(DATA_FILE, scores)
+    await send_week_embed(interaction.channel, scores)
 
     await interaction.followup.send("✅ Đã cộng điểm", ephemeral=True)
 
 @tree.command(name="week", description="Xem TOP TUẦN")
 async def week(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    await send_week_embed(interaction.channel, data_score)
+    await interaction.response.send_message("📊 Đang tải bảng xếp hạng...", ephemeral=True)
+    await send_week_embed(interaction.channel, scores)
 
 # ================== EMBED ==================
 async def send_week_embed(channel, data):
@@ -150,21 +148,21 @@ async def send_week_embed(channel, data):
         await channel.send("📭 Chưa có dữ liệu")
         return
 
-    sorted_data = sorted(data.items(), key=lambda x: x[1], reverse=True)[:10]
+    top = sorted(data.items(), key=lambda x: x[1], reverse=True)[:10]
 
     embed = discord.Embed(
         title="🏆 TOP TUẦN – CREW",
         color=discord.Color.gold()
     )
 
-    desc = []
-    for i, (name, score) in enumerate(sorted_data, 1):
+    lines = []
+    for i, (name, score) in enumerate(top, 1):
         if name == MY_GANG:
-            desc.append(f"🔥 **{i}. {name}** — `{score:,}` điểm")
+            lines.append(f"🔥 **{i}. {name}** — `{score:,}` điểm")
         else:
-            desc.append(f"**{i}. {name}** — `{score:,}` điểm")
+            lines.append(f"**{i}. {name}** — `{score:,}` điểm")
 
-    embed.description = "\n".join(desc)
+    embed.description = "\n".join(lines)
     await channel.send(embed=embed)
 
 # ================== READY ==================
