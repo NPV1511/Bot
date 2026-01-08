@@ -36,7 +36,7 @@ scores = load_json(DATA_FILE, {})
 
 # ================== BOT ==================
 intents = discord.Intents.default()
-intents.guilds = True   # ⭐ FIX QUAN TRỌNG
+intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
@@ -141,6 +141,18 @@ async def tinhdiem(interaction: discord.Interaction, text: str):
 async def week(interaction: discord.Interaction):
     await interaction.response.send_message("📊 Đang tải bảng xếp hạng...", ephemeral=True)
     await send_week_embed(interaction.channel, scores)
+
+# ================== CLEAR COMMAND ==================
+@tree.command(name="clear", description="Xóa toàn bộ điểm")
+@app_commands.checks.has_permissions(administrator=True)
+async def clear(interaction: discord.Interaction):
+    scores.clear()
+    save_json(DATA_FILE, scores)
+
+    await interaction.response.send_message(
+        "🧹 Đã xóa toàn bộ điểm!",
+        ephemeral=True
+    )
 
 # ================== EMBED ==================
 async def send_week_embed(channel, data):
