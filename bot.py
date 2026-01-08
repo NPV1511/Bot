@@ -40,49 +40,36 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ================== DAILY STATE ==================
-sent_today = {}
+# ================== AUTO DIEM DANH ==================
+async def send_diemdanh(hour: int):
+    for gid, cfg in config.items():
 
-def reset_if_new_day(guild_id):
-    today = datetime.now(tz).date()
-    if guild_id not in sent_today or sent_today[guild_id]["date"] != today:
-        sent_today[guild_id] = {
-            "date": today,
-            "noon": False,
-            "evening": False
-        }
+        # FIX: config sai kiểu thì bỏ qua
+        if not isinstance(cfg, dict):
+            continue
 
-# ================== AUTO MESSAGE ==================
-async def send_auto(guild_id, key, text):
-    reset_if_new_day(guild_id)
+        channel_id = cfg.get("diemdanh_channel")
+        if not channel_id:
+            continue
 
-    if sent_today[guild_id][key]:
-        return
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            continue
 
-    cfg = config.get(str(guild_id))
-    if not cfg or not cfg.get("diemdanh_channel"):
-        return
+        if hour == 12:
+            msg = "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN XỊT SƠN TRƯA"
+        else:
+            msg = "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN XỊT SƠN TỐI"
 
-    channel = bot.get_channel(cfg["diemdanh_channel"])
-    if channel:
-        await channel.send(text)
-        sent_today[guild_id][key] = True
+        await channel.send(msg)
+        print(f"✅ Điểm danh {hour}:00 | Guild {gid}")
 
-async def noon_job():
-    for gid in config:
-        await send_auto(
-            int(gid),
-            "noon",
-            "@everyone\n# 📌 Điểm Danh Sự Kiện Xịt Sơn Lúc 13h00"
-        )
+# ================== JOB ==================
+def noon_job():
+    bot.loop.create_task(send_diemdanh(12))
 
-async def evening_job():
-    for gid in config:
-        await send_auto(
-            int(gid),
-            "evening",
-            "@everyone\n# 📌 Điểm Danh Sự Kiện Xịt Sơn Lúc 19h00"
-        )
+def evening_job():
+    bot.loop.create_task(send_diemdanh(19))
 
 # ================== SLASH COMMAND ==================
 @tree.command(name="diemdanhroom", description="Set kênh điểm danh")
@@ -94,7 +81,7 @@ async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextCh
     save_json(CONFIG_FILE, config)
 
     await interaction.response.send_message(
-        f"✅ Kênh điểm danh: {channel.mention}",
+        f"✅ Đã set kênh điểm danh: {channel.mention}",
         ephemeral=True
     )
 
@@ -107,7 +94,7 @@ async def tinhdiemroom(interaction: discord.Interaction, channel: discord.TextCh
     save_json(CONFIG_FILE, config)
 
     await interaction.response.send_message(
-        f"✅ Kênh tính điểm: {channel.mention}",
+        f"✅ Đã set kênh tính điểm: {channel.mention}",
         ephemeral=True
     )
 
@@ -117,9 +104,9 @@ async def tinhdiem(interaction: discord.Interaction, text: str):
     await interaction.response.send_message("⏳ Đang xử lý...", ephemeral=True)
 
     gid = str(interaction.guild.id)
-    cfg = config.get(gid)
+    cfg = config.get(gid, {})
 
-    if cfg and cfg.get("tinhdiem_channel") and interaction.channel.id != cfg["tinhdiem_channel"]:
+    if cfg.get("tinhdiem_channel") and interaction.channel.id != cfg["tinhdiem_channel"]:
         await interaction.followup.send("❌ Sai kênh tính điểm", ephemeral=True)
         return
 
@@ -142,17 +129,12 @@ async def week(interaction: discord.Interaction):
     await interaction.response.send_message("📊 Đang tải bảng xếp hạng...", ephemeral=True)
     await send_week_embed(interaction.channel, scores)
 
-# ================== CLEAR COMMAND ==================
 @tree.command(name="clear", description="Xóa toàn bộ điểm")
 @app_commands.checks.has_permissions(administrator=True)
 async def clear(interaction: discord.Interaction):
     scores.clear()
     save_json(DATA_FILE, scores)
-
-    await interaction.response.send_message(
-        "🧹 Đã xóa toàn bộ điểm!",
-        ephemeral=True
-    )
+    await interaction.response.send_message("🧹 Đã xóa toàn bộ điểm!", ephemeral=True)
 
 # ================== EMBED ==================
 async def send_week_embed(channel, data):
@@ -167,14 +149,12 @@ async def send_week_embed(channel, data):
         color=discord.Color.gold()
     )
 
-    lines = []
-    for i, (name, score) in enumerate(top, 1):
-        if name == MY_GANG:
-            lines.append(f"🔥 **{i}. {name}** — `{score:,}` điểm")
-        else:
-            lines.append(f"**{i}. {name}** — `{score:,}` điểm")
+    embed.description = "\n".join(
+        f"🔥 **{i}. {name}** — `{score:,}` điểm" if name == MY_GANG
+        else f"**{i}. {name}** — `{score:,}` điểm"
+        for i, (name, score) in enumerate(top, 1)
+    )
 
-    embed.description = "\n".join(lines)
     await channel.send(embed=embed)
 
 # ================== READY ==================
@@ -185,7 +165,7 @@ async def on_ready():
 
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.add_job(noon_job, "cron", hour=12, minute=0)
-    scheduler.add_job(evening_job, "cron", hour=18, minute=0)
+    scheduler.add_job(evening_job, "cron", hour=19, minute=0)
     scheduler.start()
 
 bot.run(TOKEN)
