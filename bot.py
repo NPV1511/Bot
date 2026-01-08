@@ -37,6 +37,8 @@ scores = load_json(DATA_FILE, {})
 # ================== BOT ==================
 intents = discord.Intents.default()
 intents.guilds = True
+intents.message_content = True  # 🔥 BẮT BUỘC cho forum + history
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
@@ -88,7 +90,7 @@ async def noon_job():
     await send_diemdanh(12)
 
 async def evening_job():
-    await send_diemdanh(19)
+    await send_diemdanh(18)
 
 # ================== PERMISSION ==================
 def admin_only():
@@ -110,7 +112,7 @@ async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextCh
         ephemeral=True
     )
 
-@tree.command(name="testdiemdanh", description="Test điểm danh ngay lập tức")
+@tree.command(name="testdiemdanh", description="Test điểm danh ngay")
 @admin_only()
 @app_commands.choices(
     time=[
@@ -157,6 +159,51 @@ async def clear(interaction: discord.Interaction):
     scores.clear()
     save_json(DATA_FILE, scores)
     await interaction.response.send_message("🧹 Đã xóa toàn bộ điểm", ephemeral=True)
+
+# ================== ĐẾM ẢNH FORUM ==================
+@tree.command(
+    name="demanhforum",
+    description="Đếm ảnh trong từng mục Forum (đọc bên trong, không sai số)"
+)
+@admin_only()
+@app_commands.describe(forum="Forum cần đếm ảnh")
+async def demanhforum(
+    interaction: discord.Interaction,
+    forum: discord.ForumChannel
+):
+    await interaction.response.defer(ephemeral=True)
+
+    ket_qua = []
+
+    # Thread đang mở
+    tat_ca_threads = list(forum.threads)
+
+    # Thread đã archive
+    async for t in forum.archived_threads(limit=None):
+        tat_ca_threads.append(t)
+
+    for thread in tat_ca_threads:
+        so_anh = 0
+
+        async for msg in thread.history(limit=None):
+            if not msg.attachments:
+                continue
+
+            for att in msg.attachments:
+                if att.content_type and att.content_type.startswith("image/"):
+                    so_anh += 1
+
+        ket_qua.append(f"🧵 **{thread.name}**: {so_anh} ảnh")
+
+    if not ket_qua:
+        await interaction.followup.send("📭 Không có bài đăng", ephemeral=True)
+        return
+
+    text = "\n".join(ket_qua)
+    if len(text) > 1900:
+        text = text[:1900] + "\n..."
+
+    await interaction.followup.send(text, ephemeral=True)
 
 # ================== EMBED ==================
 async def send_week_embed(channel, data):
