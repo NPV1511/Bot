@@ -230,7 +230,7 @@ async def on_ready():
     print(f"✅ Bot online: {bot.user}")
 
     scheduler = AsyncIOScheduler(timezone=tz)
-    scheduler.add_job(noon_job, "cron", hour=12, minute=0)
+    scheduler.add_job(noon_job, "cron", hour=12, minute=12)
     scheduler.add_job(evening_job, "cron", hour=18, minute=0)
     scheduler.start()
 
