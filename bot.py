@@ -88,7 +88,7 @@ async def rainbow_role_job():
     global hue
     now = time.time()
 
-    hue = (hue + 0.12) % 1.0
+    hue = (hue + 0.08) % 1.0
     r, g, b = colorsys.hsv_to_rgb(hue, 1, 1)
     color = discord.Color.from_rgb(int(r*255), int(g*255), int(b*255))
 
@@ -272,7 +272,7 @@ async def on_ready():
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.add_job(noon_job, "cron", hour=12, minute=12)
     scheduler.add_job(evening_job, "cron", hour=18, minute=0)
-    scheduler.add_job(rainbow_role_job, "interval", seconds=6)
+    scheduler.add_job(rainbow_role_job, "interval", seconds=4)
     scheduler.start()
 
 bot.run(TOKEN)
