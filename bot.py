@@ -82,12 +82,12 @@ async def noon_job():
 async def evening_job():
     await send_diemdanh(18)
 
-# ================== 🌈 RAINBOW ROLE (FAST) ==================
+# ================== 🌈 RAINBOW ROLE (FASTER) ==================
 hue = 0.0
 
 async def rainbow_role_job():
     global hue
-    hue = (hue + 0.04) % 1.0  # 🔥 tăng nhanh hơn
+    hue = (hue + 0.06) % 1.0  # 🚀 nhanh hơn nữa
 
     r, g, b = colorsys.hsv_to_rgb(hue, 1, 1)
     color = discord.Color.from_rgb(
@@ -113,7 +113,7 @@ async def rainbow_role_job():
         except discord.Forbidden:
             print("❌ Không đủ quyền đổi màu role")
         except discord.HTTPException:
-            pass  # tránh spam lỗi rate limit
+            pass  # tránh rate limit spam log
 
 # ================== PERMISSION ==================
 def admin_only():
@@ -123,6 +123,77 @@ def admin_only():
 
 # ================== SLASH COMMAND ==================
 
+@tree.command(name="diemdanhroom", description="Set kênh điểm danh")
+@admin_only()
+async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextChannel):
+    gid = str(interaction.guild.id)
+    config.setdefault(gid, {})
+    config[gid]["diemdanh_channel"] = channel.id
+    save_json(CONFIG_FILE, config)
+    await interaction.response.send_message(f"✅ Set kênh {channel.mention}", ephemeral=True)
+
+@tree.command(name="testdiemdanh", description="Test điểm danh")
+@admin_only()
+@app_commands.choices(time=[
+    app_commands.Choice(name="Trưa", value=12),
+    app_commands.Choice(name="Tối", value=18),
+])
+async def testdiemdanh(interaction: discord.Interaction, time: app_commands.Choice[int]):
+    await interaction.response.defer(ephemeral=True)
+    await send_diemdanh(time.value, force=True)
+    await interaction.followup.send("✅ Test xong", ephemeral=True)
+
+# -------- SCORE --------
+@tree.command(name="tinhdiem", description="Cộng điểm từ bảng")
+async def tinhdiem(interaction: discord.Interaction, text: str):
+    await interaction.response.defer(ephemeral=True)
+    matches = re.findall(r"\d+\s+(\[[^\]]+\]\s+.+?)\s+([\d,]+)", text)
+
+    if not matches:
+        await interaction.followup.send("❌ Không đọc được dữ liệu", ephemeral=True)
+        return
+
+    for gang, score in matches:
+        scores[gang] = scores.get(gang, 0) + int(score.replace(",", ""))
+
+    save_json(DATA_FILE, scores)
+    await send_week_embed(interaction.channel, scores)
+    await interaction.followup.send("✅ Đã cộng điểm", ephemeral=True)
+
+@tree.command(name="week", description="Xem top tuần")
+async def week(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await send_week_embed(interaction.channel, scores)
+
+@tree.command(name="clear", description="Xóa toàn bộ điểm")
+@admin_only()
+async def clear(interaction: discord.Interaction):
+    scores.clear()
+    save_json(DATA_FILE, scores)
+    await interaction.response.send_message("🧹 Đã xóa điểm", ephemeral=True)
+
+# -------- FORUM --------
+@tree.command(name="demanhforum", description="Đếm ảnh trong forum")
+@admin_only()
+async def demanhforum(interaction: discord.Interaction, forum: discord.ForumChannel):
+    await interaction.response.defer(ephemeral=True)
+
+    result = []
+    threads = list(forum.threads)
+    async for t in forum.archived_threads(limit=None):
+        threads.append(t)
+
+    for thread in threads:
+        count = 0
+        async for msg in thread.history(limit=None):
+            for att in msg.attachments:
+                if att.content_type and att.content_type.startswith("image/"):
+                    count += 1
+        result.append(f"🧵 **{thread.name}**: {count} ảnh")
+
+    await interaction.followup.send("\n".join(result)[:1900] or "📭 Không có bài", ephemeral=True)
+
+# -------- 🌈 RAINBOW COMMAND --------
 @tree.command(name="setrainbowrole", description="Set role rainbow")
 @admin_only()
 async def setrainbowrole(interaction: discord.Interaction, role: discord.Role):
@@ -131,9 +202,7 @@ async def setrainbowrole(interaction: discord.Interaction, role: discord.Role):
     config[gid]["rainbow_role"] = role.id
     config[gid]["rainbow_enable"] = True
     save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(
-        f"🌈 Set role rainbow: {role.mention}", ephemeral=True
-    )
+    await interaction.response.send_message(f"🌈 Set role {role.mention}", ephemeral=True)
 
 @tree.command(name="rainbow", description="Bật / Tắt rainbow role")
 @admin_only()
@@ -146,7 +215,6 @@ async def rainbow(interaction: discord.Interaction, mode: app_commands.Choice[in
     config.setdefault(gid, {})
     config[gid]["rainbow_enable"] = bool(mode.value)
     save_json(CONFIG_FILE, config)
-
     await interaction.response.send_message(
         "🌈 Đã bật rainbow" if mode.value else "⛔ Đã tắt rainbow",
         ephemeral=True
@@ -157,13 +225,27 @@ async def rainbow(interaction: discord.Interaction, mode: app_commands.Choice[in
 async def rainbowstatus(interaction: discord.Interaction):
     cfg = config.get(str(interaction.guild.id), {})
     role = interaction.guild.get_role(cfg.get("rainbow_role", 0))
-
     await interaction.response.send_message(
         f"""🌈 **RAINBOW STATUS**
 • Role: {role.mention if role else '❌ Chưa set'}
 • Trạng thái: {'✅ BẬT' if cfg.get('rainbow_enable') else '⛔ TẮT'}""",
         ephemeral=True
     )
+
+# ================== EMBED ==================
+async def send_week_embed(channel, data):
+    if not data:
+        await channel.send("📭 Chưa có dữ liệu")
+        return
+
+    top = sorted(data.items(), key=lambda x: x[1], reverse=True)[:10]
+    embed = discord.Embed(title="🏆 TOP TUẦN", color=discord.Color.gold())
+    embed.description = "\n".join(
+        f"🔥 **{i}. {name}** — `{score:,}`" if name == MY_GANG
+        else f"**{i}. {name}** — `{score:,}`"
+        for i, (name, score) in enumerate(top, 1)
+    )
+    await channel.send(embed=embed)
 
 # ================== READY ==================
 @bot.event
@@ -176,8 +258,8 @@ async def on_ready():
     scheduler.add_job(noon_job, "cron", hour=12, minute=12)
     scheduler.add_job(evening_job, "cron", hour=18, minute=0)
 
-    # 🔥 RAINBOW NHANH
-    scheduler.add_job(rainbow_role_job, "interval", seconds=2)
+    # 🚀 Rainbow nhanh hơn nữa
+    scheduler.add_job(rainbow_role_job, "interval", seconds=1.5)
 
     scheduler.start()
 
