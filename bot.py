@@ -8,6 +8,7 @@ import json
 import os
 import re
 import colorsys
+import time
 
 # ================== ENV ==================
 TOKEN = os.getenv("TOKEN")
@@ -55,9 +56,6 @@ def reset_if_new_day(gid):
 async def send_diemdanh(hour, force=False):
     for gid, cfg in config.items():
         reset_if_new_day(gid)
-        if not isinstance(cfg, dict):
-            continue
-
         channel_id = cfg.get("diemdanh_channel")
         if not channel_id:
             continue
@@ -70,7 +68,7 @@ async def send_diemdanh(hour, force=False):
         if not channel:
             continue
 
-        text = "@everyone\n# 📌 ĐIỂM DANH SỰ KIÊN TRƯA" if hour == 12 else "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN TỐI"
+        text = "@everyone\n# 📌 ĐIỂM DANH TRƯA" if hour == 12 else "@everyone\n# 📌 ĐIỂM DANH TỐI"
         await channel.send(text)
 
         if not force:
@@ -82,19 +80,17 @@ async def noon_job():
 async def evening_job():
     await send_diemdanh(18)
 
-# ================== 🌈 RAINBOW ROLE (FASTER) ==================
+# ================== 🌈 RAINBOW ROLE 24/7 ==================
 hue = 0.0
+last_role_edit = {}
 
 async def rainbow_role_job():
     global hue
-    hue = (hue + 0.06) % 1.0  # 🚀 nhanh hơn nữa
+    now = time.time()
 
+    hue = (hue + 0.07) % 1.0
     r, g, b = colorsys.hsv_to_rgb(hue, 1, 1)
-    color = discord.Color.from_rgb(
-        int(r * 255),
-        int(g * 255),
-        int(b * 255)
-    )
+    color = discord.Color.from_rgb(int(r*255), int(g*255), int(b*255))
 
     for gid, cfg in config.items():
         if not cfg.get("rainbow_enable"):
@@ -104,16 +100,22 @@ async def rainbow_role_job():
         if not guild:
             continue
 
-        role = guild.get_role(cfg.get("rainbow_role", 0))
+        role_id = cfg.get("rainbow_role")
+        role = guild.get_role(role_id) if role_id else None
         if not role:
             continue
 
+        last = last_role_edit.get(role.id, 0)
+        if now - last < 10:
+            continue
+
         try:
-            await role.edit(color=color, reason="Rainbow role auto")
+            await role.edit(color=color, reason="Rainbow role 24/7")
+            last_role_edit[role.id] = now
         except discord.Forbidden:
-            print("❌ Không đủ quyền đổi màu role")
+            print("❌ Bot thiếu quyền Manage Roles")
         except discord.HTTPException:
-            pass  # tránh rate limit spam log
+            continue
 
 # ================== PERMISSION ==================
 def admin_only():
@@ -148,7 +150,6 @@ async def testdiemdanh(interaction: discord.Interaction, time: app_commands.Choi
 async def tinhdiem(interaction: discord.Interaction, text: str):
     await interaction.response.defer(ephemeral=True)
     matches = re.findall(r"\d+\s+(\[[^\]]+\]\s+.+?)\s+([\d,]+)", text)
-
     if not matches:
         await interaction.followup.send("❌ Không đọc được dữ liệu", ephemeral=True)
         return
@@ -202,9 +203,24 @@ async def setrainbowrole(interaction: discord.Interaction, role: discord.Role):
     config[gid]["rainbow_role"] = role.id
     config[gid]["rainbow_enable"] = True
     save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(f"🌈 Set role {role.mention}", ephemeral=True)
 
-@tree.command(name="rainbow", description="Bật / Tắt rainbow role")
+    bot_member = interaction.guild.me
+    if role not in bot_member.roles:
+        try:
+            await bot_member.add_roles(role, reason="Auto assign rainbow role")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ Bot không đủ quyền tự nhận role",
+                ephemeral=True
+            )
+            return
+
+    await interaction.response.send_message(
+        f"🌈 Set role {role.mention} – bot đã tự nhận role",
+        ephemeral=True
+    )
+
+@tree.command(name="rainbow", description="Bật / Tắt rainbow")
 @admin_only()
 @app_commands.choices(mode=[
     app_commands.Choice(name="Bật", value=1),
@@ -254,13 +270,9 @@ async def on_ready():
     print(f"✅ Bot online: {bot.user}")
 
     scheduler = AsyncIOScheduler(timezone=tz)
-
-    scheduler.add_job(noon_job, "cron", hour=12, minute=0)
+    scheduler.add_job(noon_job, "cron", hour=12, minute=12)
     scheduler.add_job(evening_job, "cron", hour=18, minute=0)
-
-    # 🚀 Rainbow nhanh hơn nữa
-    scheduler.add_job(rainbow_role_job, "interval", seconds=1.5)
-
+    scheduler.add_job(rainbow_role_job, "interval", seconds=10)
     scheduler.start()
 
 bot.run(TOKEN)
