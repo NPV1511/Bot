@@ -7,6 +7,7 @@ import pytz
 import json
 import os
 import re
+import colorsys
 
 # ================== ENV ==================
 TOKEN = os.getenv("TOKEN")
@@ -37,7 +38,7 @@ scores = load_json(DATA_FILE, {})
 # ================== BOT ==================
 intents = discord.Intents.default()
 intents.guilds = True
-intents.message_content = True  # 🔥 BẮT BUỘC cho forum + history
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
@@ -48,17 +49,12 @@ sent_today = {}
 def reset_if_new_day(gid: str):
     today = datetime.now(tz).date()
     if gid not in sent_today or sent_today[gid]["date"] != today:
-        sent_today[gid] = {
-            "date": today,
-            "noon": False,
-            "evening": False
-        }
+        sent_today[gid] = {"date": today, "noon": False, "evening": False}
 
-# ================== DIEM DANH CORE ==================
-async def send_diemdanh(hour: int, force: bool = False):
+# ================== DIEM DANH ==================
+async def send_diemdanh(hour: int, force=False):
     for gid, cfg in config.items():
         reset_if_new_day(gid)
-
         if not isinstance(cfg, dict):
             continue
 
@@ -81,16 +77,40 @@ async def send_diemdanh(hour: int, force: bool = False):
         )
 
         await channel.send(text)
-
         if not force:
             sent_today[gid][key] = True
 
-# ================== AUTO JOB ==================
 async def noon_job():
     await send_diemdanh(12)
 
 async def evening_job():
     await send_diemdanh(18)
+
+# ================== 🌈 RAINBOW ROLE ==================
+hue = 0.0
+
+async def rainbow_role_job():
+    global hue
+    hue = (hue + 0.02) % 1.0
+    r, g, b = colorsys.hsv_to_rgb(hue, 1, 1)
+    color = discord.Color.from_rgb(int(r*255), int(g*255), int(b*255))
+
+    for gid, cfg in config.items():
+        if not cfg.get("rainbow_enable"):
+            continue
+
+        guild = bot.get_guild(int(gid))
+        if not guild:
+            continue
+
+        role = guild.get_role(cfg.get("rainbow_role"))
+        if not role:
+            continue
+
+        try:
+            await role.edit(color=color, reason="Rainbow role auto")
+        except discord.Forbidden:
+            print("❌ Không đủ quyền đổi màu role")
 
 # ================== PERMISSION ==================
 def admin_only():
@@ -106,31 +126,20 @@ async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextCh
     config.setdefault(gid, {})
     config[gid]["diemdanh_channel"] = channel.id
     save_json(CONFIG_FILE, config)
+    await interaction.response.send_message(f"✅ Đã set {channel.mention}", ephemeral=True)
 
-    await interaction.response.send_message(
-        f"✅ Đã set kênh điểm danh: {channel.mention}",
-        ephemeral=True
-    )
-
-@tree.command(name="testdiemdanh", description="Test điểm danh ngay")
+@tree.command(name="testdiemdanh", description="Test điểm danh")
 @admin_only()
-@app_commands.choices(
-    time=[
-        app_commands.Choice(name="Trưa (12:00)", value=12),
-        app_commands.Choice(name="Tối (18:00)", value=18),
-    ]
-)
-async def testdiemdanh(
-    interaction: discord.Interaction,
-    time: app_commands.Choice[int]
-):
+@app_commands.choices(time=[
+    app_commands.Choice(name="Trưa", value=12),
+    app_commands.Choice(name="Tối", value=18)
+])
+async def testdiemdanh(interaction: discord.Interaction, time: app_commands.Choice[int]):
     await interaction.response.defer(ephemeral=True)
     await send_diemdanh(time.value, force=True)
-    await interaction.followup.send(
-        f"✅ Đã test điểm danh {time.name}",
-        ephemeral=True
-    )
+    await interaction.followup.send("✅ Test xong", ephemeral=True)
 
+# ================== SCORE ==================
 @tree.command(name="tinhdiem", description="Cộng điểm từ bảng xếp hạng")
 @app_commands.describe(text="Dán bảng điểm")
 async def tinhdiem(interaction: discord.Interaction, text: str):
@@ -160,43 +169,31 @@ async def clear(interaction: discord.Interaction):
     save_json(DATA_FILE, scores)
     await interaction.response.send_message("🧹 Đã xóa toàn bộ điểm", ephemeral=True)
 
-# ================== ĐẾM ẢNH FORUM ==================
+# ================== FORUM COUNT ==================
 @tree.command(
     name="demanhforum",
-    description="Đếm ảnh trong từng mục Forum (đọc bên trong, không sai số)"
+    description="Đếm ảnh trong Forum (chuẩn, không sai số)"
 )
 @admin_only()
-@app_commands.describe(forum="Forum cần đếm ảnh")
-async def demanhforum(
-    interaction: discord.Interaction,
-    forum: discord.ForumChannel
-):
+async def demanhforum(interaction: discord.Interaction, forum: discord.ForumChannel):
     await interaction.response.defer(ephemeral=True)
 
     ket_qua = []
+    threads = list(forum.threads)
 
-    # Thread đang mở
-    tat_ca_threads = list(forum.threads)
-
-    # Thread đã archive
     async for t in forum.archived_threads(limit=None):
-        tat_ca_threads.append(t)
+        threads.append(t)
 
-    for thread in tat_ca_threads:
+    for thread in threads:
         so_anh = 0
-
         async for msg in thread.history(limit=None):
-            if not msg.attachments:
-                continue
-
             for att in msg.attachments:
                 if att.content_type and att.content_type.startswith("image/"):
                     so_anh += 1
-
         ket_qua.append(f"🧵 **{thread.name}**: {so_anh} ảnh")
 
     if not ket_qua:
-        await interaction.followup.send("📭 Không có bài đăng", ephemeral=True)
+        await interaction.followup.send("📭 Không có bài", ephemeral=True)
         return
 
     text = "\n".join(ket_qua)
@@ -213,14 +210,12 @@ async def send_week_embed(channel, data):
 
     top = sorted(data.items(), key=lambda x: x[1], reverse=True)[:10]
     embed = discord.Embed(title="🏆 TOP TUẦN – CREW", color=discord.Color.gold())
-
     embed.description = "\n".join(
-        f"🔥 **{i}. {name}** — `{score:,}` điểm"
+        f"🔥 **{i}. {name}** — `{score:,}`"
         if name == MY_GANG else
-        f"**{i}. {name}** — `{score:,}` điểm"
+        f"**{i}. {name}** — `{score:,}`"
         for i, (name, score) in enumerate(top, 1)
     )
-
     await channel.send(embed=embed)
 
 # ================== READY ==================
@@ -232,6 +227,7 @@ async def on_ready():
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.add_job(noon_job, "cron", hour=12, minute=12)
     scheduler.add_job(evening_job, "cron", hour=18, minute=0)
+    scheduler.add_job(rainbow_role_job, "interval", seconds=8)
     scheduler.start()
 
 bot.run(TOKEN)
