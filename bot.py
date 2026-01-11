@@ -70,7 +70,7 @@ async def send_diemdanh(hour, force=False):
         if not channel:
             continue
 
-        text = "@everyone\n# 📌 ĐIỂM DANH TRƯA" if hour == 12 else "@everyone\n# 📌 ĐIỂM DANH TỐI"
+        text = "@everyone\n# 📌 ĐIỂM DANH SỰ KIÊN TRƯA" if hour == 12 else "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN TỐI"
         await channel.send(text)
 
         if not force:
@@ -255,7 +255,7 @@ async def on_ready():
 
     scheduler = AsyncIOScheduler(timezone=tz)
 
-    scheduler.add_job(noon_job, "cron", hour=12, minute=12)
+    scheduler.add_job(noon_job, "cron", hour=12, minute=0)
     scheduler.add_job(evening_job, "cron", hour=18, minute=0)
 
     # 🚀 Rainbow nhanh hơn nữa
