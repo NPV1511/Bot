@@ -187,7 +187,7 @@ async def demanhforum(interaction: discord.Interaction, forum: discord.ForumChan
             for att in msg.attachments:
                 if att.content_type and att.content_type.startswith("image/"):
                     count += 1
-        result.append(f"🧵 **{thread.name}**: {count} ảnh")
+        result.append(f"🎇 **{thread.name}**: {count} Bình")
 
     await interaction.followup.send("\n".join(result)[:1900] or "📭 Không có bài", ephemeral=True)
 
