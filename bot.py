@@ -40,6 +40,7 @@ scores = load_json(DATA_FILE, {})
 intents = discord.Intents.default()
 intents.guilds = True
 intents.message_content = True
+intents.members = True  # ⭐ BẮT BUỘC CHO ACCEPT ROLE
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
@@ -68,7 +69,7 @@ async def send_diemdanh(hour, force=False):
         if not channel:
             continue
 
-        text = "@everyone\n# 📌 ĐIỂM DANH TRƯA" if hour == 12 else "@everyone\n# 📌 ĐIỂM DANH TỐI"
+        text = "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN TRƯA" if hour == 12 else "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN TỐI"
         await channel.send(text)
 
         if not force:
@@ -80,7 +81,7 @@ async def noon_job():
 async def evening_job():
     await send_diemdanh(18)
 
-# ================== 🌈 RAINBOW ROLE 24/7 ==================
+# ================== 🌈 RAINBOW ROLE ==================
 hue = 0.0
 last_role_edit = {}
 
@@ -100,8 +101,7 @@ async def rainbow_role_job():
         if not guild:
             continue
 
-        role_id = cfg.get("rainbow_role")
-        role = guild.get_role(role_id) if role_id else None
+        role = guild.get_role(cfg.get("rainbow_role", 0))
         if not role:
             continue
 
@@ -112,10 +112,8 @@ async def rainbow_role_job():
         try:
             await role.edit(color=color, reason="Rainbow role 24/7")
             last_role_edit[role.id] = now
-        except discord.Forbidden:
-            print("❌ Bot thiếu quyền Manage Roles")
-        except discord.HTTPException:
-            continue
+        except:
+            pass
 
 # ================== PERMISSION ==================
 def admin_only():
@@ -124,7 +122,6 @@ def admin_only():
     return app_commands.check(predicate)
 
 # ================== SLASH COMMAND ==================
-
 @tree.command(name="diemdanhroom", description="Set kênh điểm danh")
 @admin_only()
 async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -194,59 +191,42 @@ async def demanhforum(interaction: discord.Interaction, forum: discord.ForumChan
 
     await interaction.followup.send("\n".join(result)[:1900] or "📭 Không có bài", ephemeral=True)
 
-# -------- 🌈 RAINBOW COMMAND --------
-@tree.command(name="setrainbowrole", description="Set role rainbow")
+# ================== 🆕 SELECT ROLE ACCEPT ==================
+@tree.command(name="selectrole", description="Set role accept + kênh thông báo")
 @admin_only()
-async def setrainbowrole(interaction: discord.Interaction, role: discord.Role):
+async def selectrole(interaction: discord.Interaction, role: discord.Role, channel: discord.TextChannel):
     gid = str(interaction.guild.id)
     config.setdefault(gid, {})
-    config[gid]["rainbow_role"] = role.id
-    config[gid]["rainbow_enable"] = True
+    config[gid]["accept_role"] = role.id
+    config[gid]["accept_channel"] = channel.id
     save_json(CONFIG_FILE, config)
 
-    bot_member = interaction.guild.me
-    if role not in bot_member.roles:
-        try:
-            await bot_member.add_roles(role, reason="Auto assign rainbow role")
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "❌ Bot không đủ quyền tự nhận role",
-                ephemeral=True
+    await interaction.response.send_message(
+        f"✅ Role accept: {role.mention}\n📢 Kênh: {channel.mention}",
+        ephemeral=True
+    )
+
+# ================== 🆕 AUTO TAG WHEN ROLE GIVEN ==================
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    gid = str(after.guild.id)
+    cfg = config.get(gid, {})
+
+    role_id = cfg.get("accept_role")
+    channel_id = cfg.get("accept_channel")
+    if not role_id or not channel_id:
+        return
+
+    before_roles = {r.id for r in before.roles}
+    after_roles = {r.id for r in after.roles}
+
+    if role_id not in before_roles and role_id in after_roles:
+        channel = after.guild.get_channel(channel_id)
+        if channel:
+            await channel.send(
+                f"🎉 Chúc Mừng {after.mention} Đã Được Accept Vào Server\n"
+                f"Vui Lòng Đọc Hết Nội Dung Ở <#1461276993126662299> Và Làm Theo"
             )
-            return
-
-    await interaction.response.send_message(
-        f"🌈 Set role {role.mention} – bot đã tự nhận role",
-        ephemeral=True
-    )
-
-@tree.command(name="rainbow", description="Bật / Tắt rainbow")
-@admin_only()
-@app_commands.choices(mode=[
-    app_commands.Choice(name="Bật", value=1),
-    app_commands.Choice(name="Tắt", value=0),
-])
-async def rainbow(interaction: discord.Interaction, mode: app_commands.Choice[int]):
-    gid = str(interaction.guild.id)
-    config.setdefault(gid, {})
-    config[gid]["rainbow_enable"] = bool(mode.value)
-    save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(
-        "🌈 Đã bật rainbow" if mode.value else "⛔ Đã tắt rainbow",
-        ephemeral=True
-    )
-
-@tree.command(name="rainbowstatus", description="Xem trạng thái rainbow")
-@admin_only()
-async def rainbowstatus(interaction: discord.Interaction):
-    cfg = config.get(str(interaction.guild.id), {})
-    role = interaction.guild.get_role(cfg.get("rainbow_role", 0))
-    await interaction.response.send_message(
-        f"""🌈 **RAINBOW STATUS**
-• Role: {role.mention if role else '❌ Chưa set'}
-• Trạng thái: {'✅ BẬT' if cfg.get('rainbow_enable') else '⛔ TẮT'}""",
-        ephemeral=True
-    )
 
 # ================== EMBED ==================
 async def send_week_embed(channel, data):
@@ -270,7 +250,7 @@ async def on_ready():
     print(f"✅ Bot online: {bot.user}")
 
     scheduler = AsyncIOScheduler(timezone=tz)
-    scheduler.add_job(noon_job, "cron", hour=12, minute=12)
+    scheduler.add_job(noon_job, "cron", hour=12, minute=0)
     scheduler.add_job(evening_job, "cron", hour=18, minute=0)
     scheduler.add_job(rainbow_role_job, "interval", seconds=6)
     scheduler.start()
