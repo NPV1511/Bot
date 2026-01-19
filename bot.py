@@ -1,14 +1,11 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
 import pytz
 import json
 import os
 import re
-import colorsys
-import time
 
 # ================== ENV ==================
 TOKEN = os.getenv("TOKEN")
@@ -39,81 +36,11 @@ scores = load_json(DATA_FILE, {})
 # ================== BOT ==================
 intents = discord.Intents.default()
 intents.guilds = True
+intents.members = True
 intents.message_content = True
-intents.members = True  # ⭐ BẮT BUỘC CHO ACCEPT ROLE
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
-
-# ================== DAILY STATE ==================
-sent_today = {}
-
-def reset_if_new_day(gid):
-    today = datetime.now(tz).date()
-    if gid not in sent_today or sent_today[gid]["date"] != today:
-        sent_today[gid] = {"date": today, "noon": False, "evening": False}
-
-# ================== DIEM DANH ==================
-async def send_diemdanh(hour, force=False):
-    for gid, cfg in config.items():
-        reset_if_new_day(gid)
-        channel_id = cfg.get("diemdanh_channel")
-        if not channel_id:
-            continue
-
-        key = "noon" if hour == 12 else "evening"
-        if sent_today[gid][key] and not force:
-            continue
-
-        channel = bot.get_channel(channel_id)
-        if not channel:
-            continue
-
-        text = "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN TRƯA" if hour == 12 else "@everyone\n# 📌 ĐIỂM DANH SỰ KIỆN TỐI"
-        await channel.send(text)
-
-        if not force:
-            sent_today[gid][key] = True
-
-async def noon_job():
-    await send_diemdanh(12)
-
-async def evening_job():
-    await send_diemdanh(18)
-
-# ================== 🌈 RAINBOW ROLE ==================
-hue = 0.0
-last_role_edit = {}
-
-async def rainbow_role_job():
-    global hue
-    now = time.time()
-
-    hue = (hue + 0.12) % 1.0
-    r, g, b = colorsys.hsv_to_rgb(hue, 1, 1)
-    color = discord.Color.from_rgb(int(r*255), int(g*255), int(b*255))
-
-    for gid, cfg in config.items():
-        if not cfg.get("rainbow_enable"):
-            continue
-
-        guild = bot.get_guild(int(gid))
-        if not guild:
-            continue
-
-        role = guild.get_role(cfg.get("rainbow_role", 0))
-        if not role:
-            continue
-
-        last = last_role_edit.get(role.id, 0)
-        if now - last < 10:
-            continue
-
-        try:
-            await role.edit(color=color, reason="Rainbow role 24/7")
-            last_role_edit[role.id] = now
-        except:
-            pass
 
 # ================== PERMISSION ==================
 def admin_only():
@@ -121,31 +48,11 @@ def admin_only():
         return interaction.user.guild_permissions.administrator
     return app_commands.check(predicate)
 
-# ================== SLASH COMMAND ==================
-@tree.command(name="diemdanhroom", description="Set kênh điểm danh")
-@admin_only()
-async def diemdanhroom(interaction: discord.Interaction, channel: discord.TextChannel):
-    gid = str(interaction.guild.id)
-    config.setdefault(gid, {})
-    config[gid]["diemdanh_channel"] = channel.id
-    save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(f"✅ Set kênh {channel.mention}", ephemeral=True)
-
-@tree.command(name="testdiemdanh", description="Test điểm danh")
-@admin_only()
-@app_commands.choices(time=[
-    app_commands.Choice(name="Trưa", value=12),
-    app_commands.Choice(name="Tối", value=18),
-])
-async def testdiemdanh(interaction: discord.Interaction, time: app_commands.Choice[int]):
-    await interaction.response.defer(ephemeral=True)
-    await send_diemdanh(time.value, force=True)
-    await interaction.followup.send("✅ Test xong", ephemeral=True)
-
-# -------- SCORE --------
+# ================== SCORE ==================
 @tree.command(name="tinhdiem", description="Cộng điểm từ bảng")
 async def tinhdiem(interaction: discord.Interaction, text: str):
     await interaction.response.defer(ephemeral=True)
+
     matches = re.findall(r"\d+\s+(\[[^\]]+\]\s+.+?)\s+([\d,]+)", text)
     if not matches:
         await interaction.followup.send("❌ Không đọc được dữ liệu", ephemeral=True)
@@ -170,7 +77,7 @@ async def clear(interaction: discord.Interaction):
     save_json(DATA_FILE, scores)
     await interaction.response.send_message("🧹 Đã xóa điểm", ephemeral=True)
 
-# -------- FORUM --------
+# ================== FORUM ==================
 @tree.command(name="demanhforum", description="Đếm ảnh trong forum")
 @admin_only()
 async def demanhforum(interaction: discord.Interaction, forum: discord.ForumChannel):
@@ -191,7 +98,7 @@ async def demanhforum(interaction: discord.Interaction, forum: discord.ForumChan
 
     await interaction.followup.send("\n".join(result)[:1900] or "📭 Không có bài", ephemeral=True)
 
-# ================== 🆕 SELECT ROLE ACCEPT ==================
+# ================== ACCEPT ROLE ==================
 @tree.command(name="selectrole", description="Set role accept + kênh thông báo")
 @admin_only()
 async def selectrole(interaction: discord.Interaction, role: discord.Role, channel: discord.TextChannel):
@@ -206,7 +113,6 @@ async def selectrole(interaction: discord.Interaction, role: discord.Role, chann
         ephemeral=True
     )
 
-# ================== 🆕 AUTO TAG WHEN ROLE GIVEN ==================
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
     gid = str(after.guild.id)
@@ -248,11 +154,5 @@ async def send_week_embed(channel, data):
 async def on_ready():
     await tree.sync()
     print(f"✅ Bot online: {bot.user}")
-
-    scheduler = AsyncIOScheduler(timezone=tz)
-    scheduler.add_job(noon_job, "cron", hour=12, minute=0)
-    scheduler.add_job(evening_job, "cron", hour=18, minute=0)
-    scheduler.add_job(rainbow_role_job, "interval", seconds=6)
-    scheduler.start()
 
 bot.run(TOKEN)
