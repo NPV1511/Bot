@@ -3,156 +3,192 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
 import pytz
+import requests
+from PIL import Image
+from io import BytesIO
 import json
 import os
-import re
 
-# ================== ENV ==================
-TOKEN = os.getenv("TOKEN")
-if not TOKEN:
-    raise RuntimeError("❌ Thiếu TOKEN")
+TOKEN = os.getenv("TOKEN")  # 🔥 lấy từ Railway ENV
 
-DATA_FILE = "data.json"
-CONFIG_FILE = "config.json"
-MY_GANG = "[DR] Dragons Breath"
-tz = pytz.timezone("Asia/Ho_Chi_Minh")
-
-# ================== LOAD / SAVE ==================
-def load_json(path, default):
-    if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(default, f, indent=2, ensure_ascii=False)
-        return default
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-config = load_json(CONFIG_FILE, {})
-scores = load_json(DATA_FILE, {})
-
-# ================== BOT ==================
 intents = discord.Intents.default()
-intents.guilds = True
-intents.members = True
 intents.message_content = True
+intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree
 
-# ================== PERMISSION ==================
-def admin_only():
-    async def predicate(interaction: discord.Interaction):
-        return interaction.user.guild_permissions.administrator
-    return app_commands.check(predicate)
+DATA_FILE = "points.json"
+CONFIG_FILE = "config.json"
+tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
-# ================== SCORE ==================
-@tree.command(name="tinhdiem", description="Cộng điểm từ bảng")
-async def tinhdiem(interaction: discord.Interaction, text: str):
-    await interaction.response.defer(ephemeral=True)
+# ================= LOAD / SAVE =================
+def load_json(file):
+    if not os.path.exists(file):
+        return {}
+    with open(file, "r") as f:
+        return json.load(f)
 
-    matches = re.findall(r"\d+\s+(\[[^\]]+\]\s+.+?)\s+([\d,]+)", text)
-    if not matches:
-        await interaction.followup.send("❌ Không đọc được dữ liệu", ephemeral=True)
-        return
+def save_json(file, data):
+    with open(file, "w") as f:
+        json.dump(data, f, indent=4)
 
-    for gang, score in matches:
-        scores[gang] = scores.get(gang, 0) + int(score.replace(",", ""))
+# ================= WEEK =================
+def get_week_key():
+    now = datetime.now(tz)
+    return f"{now.year}-W{now.isocalendar()[1]}"
 
-    save_json(DATA_FILE, scores)
-    await send_week_embed(interaction.channel, scores)
-    await interaction.followup.send("✅ Đã cộng điểm", ephemeral=True)
+# ================= CHECK ẢNH =================
+def check_image(image):
+    return True
 
-@tree.command(name="week", description="Xem top tuần")
-async def week(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    await send_week_embed(interaction.channel, scores)
-
-@tree.command(name="clear", description="Xóa toàn bộ điểm")
-@admin_only()
-async def clear(interaction: discord.Interaction):
-    scores.clear()
-    save_json(DATA_FILE, scores)
-    await interaction.response.send_message("🧹 Đã xóa điểm", ephemeral=True)
-
-# ================== FORUM ==================
-@tree.command(name="demanhforum", description="Đếm ảnh trong forum")
-@admin_only()
-async def demanhforum(interaction: discord.Interaction, forum: discord.ForumChannel):
-    await interaction.response.defer(ephemeral=True)
-
-    result = []
-    threads = list(forum.threads)
-    async for t in forum.archived_threads(limit=None):
-        threads.append(t)
-
-    for thread in threads:
-        count = 0
-        async for msg in thread.history(limit=None):
-            for att in msg.attachments:
-                if att.content_type and att.content_type.startswith("image/"):
-                    count += 1
-        result.append(f"🎇 **{thread.name}**: {count} Bình")
-
-    await interaction.followup.send("\n".join(result)[:1900] or "📭 Không có bài", ephemeral=True)
-
-# ================== ACCEPT ROLE ==================
-@tree.command(name="selectrole", description="Set role accept + kênh thông báo")
-@admin_only()
-async def selectrole(interaction: discord.Interaction, role: discord.Role, channel: discord.TextChannel):
-    gid = str(interaction.guild.id)
-    config.setdefault(gid, {})
-    config[gid]["accept_role"] = role.id
-    config[gid]["accept_channel"] = channel.id
+# ================= CHỌN FORUM =================
+@bot.tree.command(name="chude")
+@app_commands.checks.has_permissions(administrator=True)
+async def chude(interaction: discord.Interaction, forum: discord.ForumChannel):
+    config = load_json(CONFIG_FILE)
+    config[str(interaction.guild.id)] = forum.id
     save_json(CONFIG_FILE, config)
 
     await interaction.response.send_message(
-        f"✅ Role accept: {role.mention}\n📢 Kênh: {channel.mention}",
+        f"✅ Đã chọn forum: {forum.name}",
         ephemeral=True
     )
 
-@bot.event
-async def on_member_update(before: discord.Member, after: discord.Member):
-    gid = str(after.guild.id)
-    cfg = config.get(gid, {})
+# ================= RESET =================
+@bot.tree.command(name="resetdiem")
+@app_commands.checks.has_permissions(administrator=True)
+async def resetdiem(interaction: discord.Interaction, forum: discord.ForumChannel):
+    data = load_json(DATA_FILE)
+    week = get_week_key()
 
-    role_id = cfg.get("accept_role")
-    channel_id = cfg.get("accept_channel")
-    if not role_id or not channel_id:
-        return
+    if week in data:
+        del data[week]
 
-    before_roles = {r.id for r in before.roles}
-    after_roles = {r.id for r in after.roles}
+    save_json(DATA_FILE, data)
 
-    if role_id not in before_roles and role_id in after_roles:
-        channel = after.guild.get_channel(channel_id)
-        if channel:
-            await channel.send(
-                f"🎉 Chúc Mừng {after.mention} Đã Được Accept Vào Server\n"
-                f"Vui Lòng Đọc Hết Nội Dung Ở <#1461276993126662299> Và Làm Theo"
-            )
+    deleted = 0
+    for thread in forum.threads:
+        try:
+            await thread.delete()
+            deleted += 1
+        except:
+            pass
 
-# ================== EMBED ==================
-async def send_week_embed(channel, data):
-    if not data:
-        await channel.send("📭 Chưa có dữ liệu")
-        return
-
-    top = sorted(data.items(), key=lambda x: x[1], reverse=True)[:10]
-    embed = discord.Embed(title="🏆 TOP TUẦN", color=discord.Color.gold())
-    embed.description = "\n".join(
-        f"🔥 **{i}. {name}** — `{score:,}`" if name == MY_GANG
-        else f"**{i}. {name}** — `{score:,}`"
-        for i, (name, score) in enumerate(top, 1)
+    await interaction.response.send_message(
+        f"🔄 Reset + xoá {deleted} bài",
+        ephemeral=True
     )
-    await channel.send(embed=embed)
 
-# ================== READY ==================
+# ================= TỔNG ĐIỂM =================
+@bot.tree.command(name="tongdiem")
+async def tongdiem(interaction: discord.Interaction, forum: discord.ForumChannel):
+    data = load_json(DATA_FILE)
+    week = get_week_key()
+
+    msg = f"🏆 TỔNG ĐIỂM XỊT SƠN - {forum.name}\n\n"
+    found = False
+
+    threads = data.get(week, {})
+
+    for thread_id, users in threads.items():
+        try:
+            thread = await bot.fetch_channel(int(thread_id))
+        except:
+            continue
+
+        for user_id, score in users.items():
+            if score > 0:
+                user = await bot.fetch_user(int(user_id))
+                msg += f"{thread.name} - {user.name} : {score} điểm\n"
+                found = True
+
+    if not found:
+        msg += "❌ Chưa có dữ liệu"
+
+    await interaction.response.send_message(msg)
+
+# ================= THREAD =================
+@bot.event
+async def on_thread_create(thread):
+    config = load_json(CONFIG_FILE)
+    forum_id = config.get(str(thread.guild.id))
+
+    if thread.parent_id != forum_id:
+        return
+
+    try:
+        starter = await thread.fetch_message(thread.id)
+        owner = starter.author
+
+        try:
+            await owner.send(
+                f"📌 Bạn đã tạo phiếu thi đua xịt sơn\n🔗 {thread.jump_url}"
+            )
+        except:
+            await thread.send(f"{owner.mention} 📌 Bạn đã tạo phiếu thi đua xịt sơn")
+
+    except Exception as e:
+        print(e)
+
+# ================= NHẬN ẢNH =================
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if not isinstance(message.channel, discord.Thread):
+        return
+
+    config = load_json(CONFIG_FILE)
+    forum_id = config.get(str(message.guild.id))
+
+    if message.channel.parent_id != forum_id:
+        return
+
+    if message.attachments:
+        attachment = message.attachments[0]
+
+        if attachment.filename.lower().endswith(("png", "jpg", "jpeg")):
+            try:
+                response = requests.get(attachment.url)
+                img = Image.open(BytesIO(response.content)).convert("RGB")
+            except:
+                return
+
+            if check_image(img):
+                await message.add_reaction("✅")
+
+                data = load_json(DATA_FILE)
+                week = get_week_key()
+                thread_id = str(message.channel.id)
+                user_id = str(message.author.id)
+
+                if week not in data:
+                    data[week] = {}
+
+                if thread_id not in data[week]:
+                    data[week][thread_id] = {}
+
+                if user_id not in data[week][thread_id]:
+                    data[week][thread_id][user_id] = 0
+
+                data[week][thread_id][user_id] += 1
+                total = data[week][thread_id][user_id]
+
+                save_json(DATA_FILE, data)
+
+                await message.reply(
+                    f" +1 điểm xịt sơn\n Tổng: **{total}**"
+                )
+            else:
+                await message.add_reaction("❌")
+
+    await bot.process_commands(message)
+
+# ================= READY =================
 @bot.event
 async def on_ready():
-    await tree.sync()
+    await bot.tree.sync()
     print(f"✅ Bot online: {bot.user}")
 
 bot.run(TOKEN)
