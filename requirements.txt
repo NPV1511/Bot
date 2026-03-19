@@ -1,4 +1,4 @@
 discord.py
-apscheduler
 pytz
-
+requests
+pillow
